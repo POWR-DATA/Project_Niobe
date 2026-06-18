@@ -32,7 +32,7 @@ export async function signOut() {
 
 export async function resetPassword(email: string) {
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: 'https://www.powrdata.com.au/horroscope/reset-password',
+    redirectTo: 'https://www.powrdata.com.au/apps/horroscope/reset-password',
   });
   if (error) throw error;
 }
