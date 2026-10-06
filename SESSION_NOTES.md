@@ -78,6 +78,64 @@ The Expo default template includes `explore.tsx` which references `@/components/
 ### CSS module declarations
 The template's `animated-icon.web.tsx` imports a `.css` file; `constants/theme.ts` has a side-effect CSS import. We added `src/types/modules.d.ts` with `declare module '*.css' { ... }` so TypeScript doesn't error on these.
 
+## Local Android Build on Windows (long / OneDrive path)
+
+`npx expo run:android` fails when the project lives at a long path like the OneDrive one. The Android NDK's CMake/ninja hits the 260-char limit (enabling `LongPathsEnabled` doesn't help), and OneDrive locks Gradle output dirs while syncing. Cloud EAS builds are unaffected; this is only for local emulator builds. Cloning to a short path outside OneDrive (e.g. `C:\dev\Project_Niobe`) avoids all of it.
+
+Otherwise, redo this setup every time `android/` is regenerated (`npx expo prebuild`), since `android/` is gitignored:
+
+**1. Short-path junction to the project root** (once per machine):
+```powershell
+cmd /c mklink /J C:\PN "<full path to Project_Niobe>"
+```
+Remove it later with `cmd /c rmdir C:\PN` — never `Remove-Item -Recurse`, which in Windows PowerShell 5.1 can delete through the junction into the real project.
+
+**2. Add to `android/build.gradle`:**
+```groovy
+allprojects {
+  // ... existing repositories block ...
+  // Redirect node_modules buildDir outside OneDrive to avoid file locking
+  if (project.projectDir.path.replace('\\', '/').contains('node_modules')) {
+    buildDir = "C:/temp/gradle-builds/${project.name}/build"
+  }
+}
+
+// Redirect CMake .cxx staging dirs to a short path (260-char limit)
+subprojects {
+  afterEvaluate { proj ->
+    if (proj.plugins.hasPlugin('com.android.library') || proj.plugins.hasPlugin('com.android.application')) {
+      try {
+        proj.android.externalNativeBuild.cmake.buildStagingDirectory =
+          new File("C:/temp/cxx-builds/${proj.name}")
+      } catch (Exception ignored) {}
+    }
+  }
+}
+```
+
+**3. Run one full build** so Gradle populates `C:/temp/gradle-builds/<pkg>/build/generated/source/codegen/jni/` for each native module.
+
+**4. Junction the codegen headers back into `node_modules`** (from the project root). Each module's `CMakeLists.txt` and the autolinking JSON hardcode `android/build/generated/source/codegen/jni`, which the buildDir redirect moved:
+```powershell
+$nodeBase = Join-Path (Get-Location) 'node_modules'
+foreach ($pkg in 'react-native-gesture-handler', 'react-native-safe-area-context', 'react-native-screens') {
+  $target = "C:\temp\gradle-builds\$pkg\build\generated\source\codegen\jni"
+  $link   = "$nodeBase\$pkg\android\build\generated\source\codegen\jni"
+  New-Item -ItemType Directory -Force -Path (Split-Path $link) | Out-Null
+  if (-not (Test-Path $link)) { New-Item -ItemType Junction -Path $link -Target $target | Out-Null }
+}
+```
+
+**5. Build from the short path:**
+```bash
+cd /c/PN
+JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" \
+ANDROID_HOME="/c/Users/<you>/Android/Sdk" \
+npx expo run:android
+```
+
+Subsequent builds are incremental; the junctions survive reboots. `C:\temp\gradle-builds` and `C:\temp\cxx-builds` are pure caches and safe to delete.
+
 ## Commands to Resume in a Fresh Session
 
 ```powershell
